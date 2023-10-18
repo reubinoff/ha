@@ -1,0 +1,199 @@
+blueprint:
+  name: HVAC Daily Schedule
+  description: Set the target HVAC temperature based on its mode.
+  domain: automation
+
+  input:
+    climate_id:
+      name: Thermostat
+      description: The thermostat to control.
+      selector:
+        entity:
+          domain: climate
+
+    cooling_temp:
+      name: Cool Set Point
+      description: The target temperature when cooling.
+      selector:
+        number:
+          min: 0
+          max: 100
+
+    heating_temp:
+      name: Heat Set Point
+      description: The target temperature when heating.
+      selector:
+        number:
+          min: 0
+          max: 100
+
+    at_time:
+      name: Time
+      description: The time to update this device.
+      selector:
+        time:
+
+    retry_timeout:
+      name: Retry Timeout
+      description: Duration (in minutes) to retry if the device is offline.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 240
+
+    on_monday:
+      name: Monday
+      default: true
+      selector:
+        boolean:
+
+    on_tuesday:
+      name: Tuesday
+      default: true
+      selector:
+        boolean:
+
+    on_wednesday:
+      name: Wednesday
+      default: true
+      selector:
+        boolean:
+
+    on_thursday:
+      name: Thursday
+      default: true
+      selector:
+        boolean:
+
+    on_friday:
+      name: Friday
+      default: true
+      selector:
+        boolean:
+
+    on_saturday:
+      name: Saturday
+      default: true
+      selector:
+        boolean:
+
+    on_sunday:
+      name: Sunday
+      default: true
+      selector:
+        boolean:
+
+variables:
+
+  # re-declare input as a variable for scripting templates
+  retry_timeout: !input 'retry_timeout'
+
+  # array used in the condition for this automation
+  weekly_schedule:
+    - !input 'on_monday'
+    - !input 'on_tuesday'
+    - !input 'on_wednesday'
+    - !input 'on_thursday'
+    - !input 'on_friday'
+    - !input 'on_saturday'
+    - !input 'on_sunday'
+
+trigger:
+  - platform: time
+    at: !input 'at_time'
+
+# only run on days we have been requested (using schedule array)
+condition: '{{ weekly_schedule[now().weekday()] }}'
+
+action:
+
+  # thermostats require different inputs depending on the current mode
+
+  - choose:
+
+    ## heating mode ##
+    - conditions:
+        - condition: state
+          entity_id: !input 'climate_id'
+          state: heat
+
+      sequence:
+        - repeat:
+
+            # set the target temperature to the heating_temp input
+            sequence:
+              - service: climate.set_temperature
+                entity_id: !input 'climate_id'
+                data:
+                  temperature: !input 'heating_temp'
+              - delay: '00:01:00'
+
+            # verify that the temperature was set until the retry timeout expires
+            until:
+              - or:
+                - '{{ repeat.index > retry_timeout }}'
+                - condition: state
+                  entity_id: !input 'climate_id'
+                  attribute: temperature
+                  state: !input 'heating_temp'
+
+    ## cooling mode ##
+    - conditions:
+        - condition: state
+          entity_id: !input 'climate_id'
+          state: cool
+
+      sequence:
+        - repeat:
+
+            # set the target temperature to the cooling_temp input
+            sequence:
+              - service: climate.set_temperature
+                entity_id: !input 'climate_id'
+                data:
+                  temperature: !input 'cooling_temp'
+              - delay: '00:01:00'
+
+            # verify that the temperature was set until the retry timeout expires
+            until:
+              - or:
+                - '{{ repeat.index > retry_timeout }}'
+                - condition: state
+                  entity_id: !input 'climate_id'
+                  attribute: temperature
+                  state: !input 'cooling_temp'
+
+    ## heat/cool mode ##
+    - conditions:
+        - condition: state
+          entity_id: !input 'climate_id'
+          state: heat_cool
+
+      sequence:
+        - repeat:
+
+            # set the target temperature range based on user input
+            sequence:
+              - service: climate.set_temperature
+                entity_id: !input 'climate_id'
+                data:
+                  target_temp_high: !input 'cooling_temp'
+                  target_temp_low: !input 'heating_temp'
+              - delay: '00:01:00'
+
+            # verify that the temperature was set until the retry timeout expires
+            until:
+              - or:
+                - '{{ repeat.index > retry_timeout }}'
+                - and:
+                  - condition: state
+                    entity_id: !input 'climate_id'
+                    attribute: target_temp_high
+                    state: !input 'cooling_temp'
+                  - condition: state
+                    entity_id: !input 'climate_id'
+                    attribute: target_temp_low
+                    state: !input 'heating_temp'
+
+mode: single
